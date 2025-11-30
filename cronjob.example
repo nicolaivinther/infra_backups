@@ -1,5 +1,5 @@
 # PostgreSQL Backup Cronjob
 # Add this to your crontab with: crontab -e
 
-# Run backup daily at 01:00 AM
-0 1 * * * /Users/nicolaitanghoj/dev/infra_backups/local_cronjobs/backup_postgres.sh
+# Run backup weekly on Sunday at 01:00 AM
+0 1 * * 0 /Users/nicolaitanghoj/dev/infra_backups/local_cronjobs/backup_postgres.sh
