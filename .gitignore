@@ -1,0 +1,8 @@
+# Local environment overrides
+.development.env
+
+# Config with secrets
+config.env
+
+# Backup files (don't commit actual backups)
+*.dump.gz
