@@ -5,7 +5,7 @@ Automated PostgreSQL database dumps synced to a remote server via WireGuard VPN.
 ## Overview
 
 This repository provides a reliable off-machine backup solution for PostgreSQL databases. Backups are:
-- Dumped nightly using `pg_dump`
+- Dumped weekly using `pg_dump`
 - Compressed with gzip
 - Transferred to a remote server via rsync over WireGuard
 - Rotated to keep only the 2 most recent backups (local + remote)
@@ -20,71 +20,82 @@ This repository provides a reliable off-machine backup solution for PostgreSQL d
 
 1. **SSH key authentication** configured between Mac mini and remote server:
    ```bash
-   ssh-keygen -t ed25519 -C "backup@macmini"
-   ssh-copy-id marcus@10.0.0.2
+   ssh-copy-id user@remote-host
    ```
 
-2. **WireGuard VPN** connection active
+2. **WireGuard VPN** connection active (auto-starts via LaunchDaemon)
 
 3. **PostgreSQL** with `pg_dump` available
 
 4. **rsync** installed on both machines
 
+5. **direnv** installed for environment management
+
 ## Installation
 
 1. Clone this repository:
    ```bash
-   git clone <repo-url> ~/infra-backups
-   cd ~/infra-backups
+   git clone <repo-url> ~/dev/infra_backups
+   cd ~/dev/infra_backups
    ```
 
-2. Copy and configure the environment file:
+2. Configure environment files:
    ```bash
-   cp config.env.example config.env
-   # Edit config.env with your settings
+   # Edit .default.env with shared defaults
+   # Edit .development.env with your local overrides (gitignored)
+   direnv allow
    ```
 
-3. Make the backup script executable:
+3. Make scripts executable:
    ```bash
-   chmod +x backup.sh
+   chmod +x dump_psql_backup.sh
+   chmod +x local_cronjobs/backup_postgres.sh
    ```
 
 4. Test the backup manually:
    ```bash
-   ./backup.sh
+   ./local_cronjobs/backup_postgres.sh
    ```
 
 5. Set up the cronjob:
    ```bash
    crontab -e
-   # Add the line from cronjob.example
+   # Add: 0 1 * * 0 /Users/nicolaitanghoj/dev/infra_backups/local_cronjobs/backup_postgres.sh
    ```
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `backup.sh` | Main backup script |
-| `config.env.example` | Configuration template |
+| `dump_psql_backup.sh` | Main backup script (dump, sync, rotate) |
+| `local_cronjobs/backup_postgres.sh` | Cronjob wrapper (loads env, runs backup) |
+| `.default.env` | Default configuration (tracked in git) |
+| `.development.env` | Local overrides (gitignored) |
+| `.envrc` | direnv config |
 | `cronjob.example` | Cron schedule example |
 
 ## Configuration
 
-Edit `config.env` with your settings:
-
+### .default.env (defaults)
 ```bash
-DB_USER="your_postgres_user"
-DB_LIST=("db1" "db2" "db3")
-REMOTE_USER="marcus"
-REMOTE_HOST="10.0.0.2"
+DB_USER="nicolaivinther"
+DB_LIST="pinnacle_odds,basketball_stats,icehockey_stats,multisport_stats"
+BACKUP_DIR="/tmp/pg_backups"
 REMOTE_PATH="/media/antimac/Cloud"
+KEEP_BACKUPS="2"
+```
+
+### .development.env (local overrides)
+```bash
+REMOTE_USER="nicolai"
+REMOTE_HOST="192.168.11.3"
 ```
 
 ## Backup Schedule
 
-Default: Daily at 01:00 AM
+Weekly on Sunday at 01:00 AM
 
-Logs are written to `/tmp/pg_backups/pg_backup.log`
+Logs: `/tmp/pg_backups/pg_backup.log`
 
 ## Retention Policy
 
@@ -95,17 +106,20 @@ Logs are written to `/tmp/pg_backups/pg_backup.log`
 
 ```bash
 # Download backup from remote
-scp marcus@10.0.0.2:/media/antimac/Cloud/database_name_20250101_0100.dump.gz .
+scp user@remote:/media/antimac/Cloud/database_name_20250101_0100.dump.gz .
 
 # Decompress and restore
 gunzip -c database_name_20250101_0100.dump.gz | pg_restore -U nicolaivinther -d database_name
 ```
 
-## Future Improvements
+## WireGuard Auto-Start
 
-- [ ] Failover scraping logic (detect Mac-mini-down, activate scraper on Marcus' server)
-- [ ] Delta sync handling
-- [ ] Monitoring/alerting on backup failures
+WireGuard is configured to start on boot via LaunchDaemon:
+```
+/Library/LaunchDaemons/com.wireguard.Nicolai_MacMini.plist
+```
+
+Check status: `sudo wg show`
 
 ## Author
 

@@ -7,7 +7,8 @@ set -euo pipefail
 # === DEFAULTS (can be overridden via environment) ===
 BACKUP_DIR="${BACKUP_DIR:-/tmp/pg_backups}"
 LOG_FILE="${LOG_FILE:-${BACKUP_DIR}/pg_backup.log}"
-KEEP_BACKUPS="${KEEP_BACKUPS:-2}"
+KEEP_LOCAL_BACKUPS="${KEEP_LOCAL_BACKUPS:-1}"
+KEEP_REMOTE_BACKUPS="${KEEP_REMOTE_BACKUPS:-2}"
 
 # Convert comma-separated DB_LIST to array
 IFS=',' read -ra DB_ARRAY <<< "$DB_LIST"
@@ -31,12 +32,12 @@ for DB_NAME in "${DB_ARRAY[@]}"; do
 
     # === CLEAN UP OLD LOCAL BACKUPS (KEEP N MOST RECENT) ===
     cd "$BACKUP_DIR"
-    ls -t ${DB_NAME}_*.dump.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -- 2>/dev/null || true
-    echo "[$(date)] Local cleanup for ${DB_NAME}: kept ${KEEP_BACKUPS} newest." | tee -a "$LOG_FILE"
+    ls -t ${DB_NAME}_*.dump.gz 2>/dev/null | tail -n +$((KEEP_LOCAL_BACKUPS + 1)) | xargs -r rm -- 2>/dev/null || true
+    echo "[$(date)] Local cleanup for ${DB_NAME}: kept ${KEEP_LOCAL_BACKUPS} newest." | tee -a "$LOG_FILE"
 
     # === CLEAN UP OLD REMOTE BACKUPS (KEEP N MOST RECENT) ===
-    ssh "${REMOTE_USER}@${REMOTE_HOST}" "cd ${REMOTE_PATH} && ls -t ${DB_NAME}_*.dump.gz 2>/dev/null | tail -n +$((KEEP_BACKUPS + 1)) | xargs -r rm -- 2>/dev/null || true"
-    echo "[$(date)] Remote cleanup for ${DB_NAME}: kept ${KEEP_BACKUPS} newest." | tee -a "$LOG_FILE"
+    ssh "${REMOTE_USER}@${REMOTE_HOST}" "cd ${REMOTE_PATH} && ls -t ${DB_NAME}_*.dump.gz 2>/dev/null | tail -n +$((KEEP_REMOTE_BACKUPS + 1)) | xargs -r rm -- 2>/dev/null || true"
+    echo "[$(date)] Remote cleanup for ${DB_NAME}: kept ${KEEP_REMOTE_BACKUPS} newest." | tee -a "$LOG_FILE"
 
 done
 
