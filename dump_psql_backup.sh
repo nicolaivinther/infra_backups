@@ -11,7 +11,11 @@ set -euo pipefail
 # === DEFAULTS (can be overridden via environment) ===
 BACKUP_DIR="${BACKUP_DIR:-/Users/nicolaitanghoj/pg_backups}"
 LOG_FILE="${LOG_FILE:-${BACKUP_DIR}/pg_backup.log}"
-STATUS_FILE="${STATUS_FILE:-${BACKUP_DIR}/last_run_status}"
+# Profile name, if invoked via the cron wrapper with one (daily/weekly). The
+# status file is per-profile so the nightly run cannot clobber the weekly run's
+# result — otherwise a green nightly would mask a failed weekly.
+BACKUP_PROFILE="${BACKUP_PROFILE:-}"
+STATUS_FILE="${STATUS_FILE:-${BACKUP_DIR}/last_run_status${BACKUP_PROFILE:+_${BACKUP_PROFILE}}}"
 KEEP_LOCAL_BACKUPS="${KEEP_LOCAL_BACKUPS:-1}"
 KEEP_REMOTE_BACKUPS="${KEEP_REMOTE_BACKUPS:-12}"
 # Peak local usage is two full sets (~40GB) because the previous dump is only
@@ -54,11 +58,13 @@ alert() {
         --arg db "$CURRENT_DB" \
         --arg stage "$CURRENT_STAGE" \
         --arg host "$(hostname)" \
+        --arg profile "${BACKUP_PROFILE:-none}" \
         '{event_id: $event_id, timestamp: $ts, platform: "other",
           level: "error", logger: "pg_backup", server_name: $host,
           environment: $env,
           message: {formatted: $msg},
-          tags: {job: "pg_backup", database: $db, stage: $stage},
+          tags: {job: "pg_backup", database: $db, stage: $stage,
+                 profile: $profile},
           extra: {detail: $detail}}' 2>/dev/null) || return 0
 
     curl -sS --max-time 15 -X POST \
@@ -136,7 +142,7 @@ log "=== Preflight passed ==="
 # ============================================================
 IFS=',' read -ra DB_ARRAY <<< "$DB_LIST"
 
-log "Starting multi-database backup (${#DB_ARRAY[@]} databases, keep ${KEEP_LOCAL_BACKUPS} local / ${KEEP_REMOTE_BACKUPS} remote)"
+log "Starting backup${BACKUP_PROFILE:+ [profile: ${BACKUP_PROFILE}]} (${#DB_ARRAY[@]} databases, keep ${KEEP_LOCAL_BACKUPS} local / ${KEEP_REMOTE_BACKUPS} remote)"
 
 for DB_NAME in "${DB_ARRAY[@]}"; do
     CURRENT_DB="$DB_NAME"
