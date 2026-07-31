@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Re-ups the WireGuard tunnel if it dies while the machine is running.
+  RunAtLoad on the boot daemon only covers boot; this covers everything after.
+  Runs as root (system domain) so it needs no sudo and never prompts.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wireguard.watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/libexec/wireguard_watchdog.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>600</integer>
+    <key>StandardOutPath</key>
+    <string>/var/log/wireguard-watchdog-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/wireguard-watchdog-launchd.log</string>
+</dict>
+</plist>
