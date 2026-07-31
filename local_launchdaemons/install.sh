@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs the WireGuard LaunchDaemons. Run with sudo:
+# Installs the WireGuard and PostgreSQL LaunchDaemons. Run with sudo:
 #
 #   sudo ./local_launchdaemons/install.sh
 #
@@ -60,6 +60,21 @@ fi
 launchctl bootout system/com.wireguard.watchdog 2>/dev/null || true
 launchctl bootstrap system "${DAEMONS}/com.wireguard.watchdog.plist"
 echo "  com.wireguard.watchdog loaded (runs every 600s)"
+
+echo "=== installing postgres daemon ==="
+install -o root -g wheel -m 755 "${SRC}/start_postgres_minidata.sh" "${LIBEXEC}/start_postgres_minidata.sh"
+install -o root -g wheel -m 644 "${SRC}/com.nicolai.postgresql16.plist" "${DAEMONS}/com.nicolai.postgresql16.plist"
+plutil -lint "${DAEMONS}/com.nicolai.postgresql16.plist"
+
+# Loading while a manually-started postmaster is running is safe: the launcher
+# defers to it and only takes over once it stops (see start_postgres_minidata.sh).
+# If already loaded, leave it alone — a bootout would restart a live database.
+if launchctl print system/com.nicolai.postgresql16 >/dev/null 2>&1; then
+    echo "  com.nicolai.postgresql16 already loaded — plist updated, takes effect at next boot"
+else
+    launchctl bootstrap system "${DAEMONS}/com.nicolai.postgresql16.plist"
+    echo "  com.nicolai.postgresql16 loaded"
+fi
 
 echo "=== state ==="
 /opt/homebrew/bin/wg show || echo "WARNING: wg show reported nothing — tunnel may not be up"

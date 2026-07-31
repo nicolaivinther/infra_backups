@@ -12,14 +12,10 @@ set -a
 [ -f .development.env ] && source .development.env
 set +a
 
-# Start WireGuard
-sudo wg-quick up Nicolai_MacMini
+# The WireGuard tunnel is managed by the LaunchDaemons and stays up 24/7 —
+# this script must NOT bring it up or down (see local_launchdaemons/). It also
+# cannot: cron has no tty for sudo, and tearing the tunnel down would fight the
+# watchdog. dump_psql_backup.sh's preflight fails fast with a Sentry alert if
+# the tunnel is down.
 
-# Run backup (ensure WireGuard is stopped even if backup fails)
-./dump_psql_backup.sh || BACKUP_FAILED=1
-
-# Stop WireGuard
-sudo wg-quick down Nicolai_MacMini
-
-# Exit with backup status
-exit ${BACKUP_FAILED:-0}
+./dump_psql_backup.sh

@@ -21,8 +21,12 @@ tail -f /Users/nicolaitanghoj/pg_backups/pg_backup.log
 # Did the last run succeed?
 cat /Users/nicolaitanghoj/pg_backups/last_run_status
 
-# Install / reinstall the WireGuard LaunchDaemons
+# Install / reinstall the LaunchDaemons (WireGuard + PostgreSQL)
 sudo ./local_launchdaemons/install.sh
+
+# PostgreSQL daemon state and log
+sudo launchctl print system/com.nicolai.postgresql16 | head -20
+tail -20 /Users/nicolaitanghoj/Library/Logs/postgresql16.log
 
 # Tunnel state
 sudo wg show
@@ -38,7 +42,7 @@ gunzip -c database_name_YYYYMMDD_HHMM.dump.gz | pg_restore -U nicolaivinther -d 
 
 - `dump_psql_backup.sh` - Main script. Runs preflight checks, then for each database in `DB_LIST`: dump → verify → transfer → verify remote → rotate.
 - `local_cronjobs/backup_postgres.sh` - Cron wrapper. `cd`s into the repo, sources `.default.env` then `.development.env` (with `set -a` to export), and calls `dump_psql_backup.sh`.
-- `local_launchdaemons/` - The two root LaunchDaemons that keep the tunnel alive, plus `install.sh` to deploy them.
+- `local_launchdaemons/` - Root LaunchDaemons: two that keep the WireGuard tunnel alive, one that auto-starts PostgreSQL at boot, plus `install.sh` to deploy them all.
 - `.default.env` - Committed defaults (DB user/list, paths, retention, Sentry DSN).
 - `.development.env` - Local, gitignored overrides (`REMOTE_USER`, `REMOTE_HOST`).
 - `.envrc` - direnv config; loads both env files into the interactive shell.
@@ -137,6 +141,32 @@ The watchdog recycles the tunnel when the interface is missing, or the route to
 healthy but the host is unreachable, it waits for **two consecutive** failures
 (~20 min) before acting — Marcus's server being down is not a reason to tear
 down our end.
+
+## PostgreSQL auto-start
+
+The cluster's data directory is `/Volumes/MiniData/postgres_data` (external
+Thunderbolt SSD), so `brew services start postgresql@16` is **wrong twice**: it
+points at the internal default data dir, and it would race the volume mount at
+boot. Until 2026-07-31 there was no auto-start at all — every reboot needed a
+manual `pg_ctl -D /Volumes/MiniData/postgres_data start`.
+
+`com.nicolai.postgresql16.plist` (installed by `install.sh`) runs
+`/usr/local/libexec/start_postgres_minidata.sh` as `nicolaitanghoj` at boot,
+before login. The launcher:
+
+- waits up to 5 min for `/Volumes/MiniData` to mount, then exits nonzero so
+  launchd retries;
+- defers to an already-running postmaster (manual-start era, install-time
+  handover) and takes over within 30s of it stopping;
+- runs `postgres` in the foreground under launchd supervision. `KeepAlive`
+  `SuccessfulExit=false` means a crash restarts it, but a clean `pg_ctl stop`
+  stays stopped (restart with
+  `sudo launchctl kickstart system/com.nicolai.postgresql16`);
+- traps launchd's shutdown SIGTERM and forwards SIGINT, because SIGTERM is
+  postgres's "smart" shutdown, which waits forever on idle client connections
+  and would end in a SIGKILL after `ExitTimeOut`.
+
+Logs: `/Users/nicolaitanghoj/Library/Logs/postgresql16.log`.
 
 ## Incident: July 2026 — three weeks of silent backup loss
 
