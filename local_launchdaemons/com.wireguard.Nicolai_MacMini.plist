@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Brings the WireGuard tunnel up at boot.
+
+  The path MUST be /opt/homebrew/bin/wg-quick. This is an Apple Silicon Mac, so
+  Homebrew lives under /opt/homebrew; the original version of this file pointed
+  at /usr/local/bin/wg-quick, which does not exist here. The daemon therefore
+  failed silently at every boot, and after the 2026-07-10 reboot the tunnel
+  stayed down and three weekly backups were lost before anyone noticed.
+
+  EnvironmentVariables/PATH is required too: wg-quick is a shell script that
+  shells out to `wg`, and launchd's default PATH does not include Homebrew.
+
+  KeepAlive is deliberately false — `wg-quick up` exits after configuring the
+  interface, so KeepAlive would relaunch it in a loop. Recovery from a
+  mid-session tunnel failure is handled by com.wireguard.watchdog.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wireguard.Nicolai_MacMini</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/wg-quick</string>
+        <string>up</string>
+        <string>Nicolai_MacMini</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+    <!--
+      wg-quick exits after backgrounding wireguard-go — the process that IS the
+      tunnel. Without AbandonProcessGroup, launchd SIGKILLs the leftover process
+      group when wg-quick exits, silently tearing the tunnel down again.
+    -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/wireguard-nicolai-macmini.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/wireguard-nicolai-macmini.log</string>
+</dict>
+</plist>
