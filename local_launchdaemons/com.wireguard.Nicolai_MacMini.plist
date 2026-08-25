@@ -35,6 +35,13 @@
     <true/>
     <key>KeepAlive</key>
     <false/>
+    <!--
+      wg-quick exits after backgrounding wireguard-go — the process that IS the
+      tunnel. Without AbandonProcessGroup, launchd SIGKILLs the leftover process
+      group when wg-quick exits, silently tearing the tunnel down again.
+    -->
+    <key>AbandonProcessGroup</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/var/log/wireguard-nicolai-macmini.log</string>
     <key>StandardErrorPath</key>

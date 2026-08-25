@@ -46,8 +46,8 @@ gunzip -c database_name_YYYYMMDD_HHMM.dump.gz | pg_restore -U nicolaivinther -d 
 - `.default.env` - Committed defaults (DB user/list, paths, retention, Sentry DSN).
 - `.development.env` - Local, gitignored overrides (`REMOTE_USER`, `REMOTE_HOST`).
 - `.envrc` - direnv config; loads both env files into the interactive shell.
-- Backups stored locally at `/Users/nicolaitanghoj/pg_backups/` and remotely at `/media/antimac/Cloud/pg_backups/`.
-- Runs via cron weekly: Sunday at 10:00 (`0 10 * * 0`).
+- Backups stored locally at `/Users/nicolaitanghoj/pg_backups/` and remotely at `/media/antimac/Z/pg_backups/` (Marcus renamed the disk from `Cloud` to `Z` in Aug 2026 — capital Z).
+- Runs via cron in two profiles: daily at 03:30 (small operational DBs, `.daily.env`) and weekly Sunday at 10:00 (pinnacle_odds, `.weekly.env`).
 
 ### Ordering guarantees
 
@@ -91,10 +91,10 @@ In `.default.env` (committed):
 - `DB_USER` - PostgreSQL role used for `pg_dump` / `pg_restore`.
 - `DB_LIST` - Comma-separated string of database names to back up.
 - `BACKUP_DIR` - Local backup directory (`/Users/nicolaitanghoj/pg_backups`). **Not `/tmp`** — macOS wipes `/tmp` on reboot, which is how the July 2026 outage went unnoticed.
-- `REMOTE_PATH` - Remote destination directory (default: `/media/antimac/Cloud/pg_backups`).
-- `KEEP_LOCAL_BACKUPS` - Local retention per database (default: 1).
+- `REMOTE_PATH` - Remote destination directory (default: `/media/antimac/Z/pg_backups`).
+- `KEEP_LOCAL_BACKUPS` - Local retention per database (default: 1). `0` is valid and means "ship then delete": the local dump is removed once the remote copy is size-verified — the weekly profile uses this so the ~18GB pinnacle_odds dump never occupies local disk between runs.
 - `KEEP_REMOTE_BACKUPS` - Remote retention per database (default: 12, ~3 months).
-- `MIN_FREE_GB` - Preflight local space floor (default: 45; peak usage is two full sets).
+- `MIN_FREE_GB` - Preflight local space floor (default: 45). Profiles override it: daily 10, weekly 25 (one in-flight ~18GB dump plus margin, since the weekly profile deletes the local copy after shipping).
 - `SENTRY_DSN` / `SENTRY_ENVIRONMENT` - Failure alerting. Empty DSN disables it.
 
 In `.development.env` (gitignored):
@@ -135,6 +135,14 @@ and launchd's default PATH excludes Homebrew.
 `KeepAlive` is deliberately `false` on the boot daemon: `wg-quick up` exits once
 the interface is configured, so `KeepAlive` would relaunch it forever. That is
 precisely why the watchdog exists.
+
+**Both plists MUST set `AbandonProcessGroup=true`.** On macOS the tunnel is a
+userspace `wireguard-go` process that `wg-quick` backgrounds before exiting.
+By default launchd SIGKILLs whatever remains of a job's process group when the
+job exits — i.e. it kills the tunnel that was just brought up. This caused the
+Aug 2026 outage: the watchdog logged "tunnel back up" every 10 minutes for days,
+while each recovered tunnel was killed seconds later, and every backup failed
+preflight with an SSH error.
 
 The watchdog recycles the tunnel when the interface is missing, or the route to
 `192.168.11.3` is no longer on a `utun` device. If the interface and route are

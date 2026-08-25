@@ -22,6 +22,15 @@
     <true/>
     <key>StartInterval</key>
     <integer>600</integer>
+    <!--
+      Without this, launchd SIGKILLs everything left in the job's process group
+      when the script exits — including the wireguard-go process that wg-quick
+      backgrounds, i.e. the tunnel itself. That is how the Aug 2026 outage
+      looped: every watchdog "recovery" was killed seconds after "tunnel back
+      up", every 10 minutes, for days.
+    -->
+    <key>AbandonProcessGroup</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/var/log/wireguard-watchdog-launchd.log</string>
     <key>StandardErrorPath</key>
