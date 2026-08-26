@@ -21,11 +21,12 @@ tail -f /Users/nicolaitanghoj/pg_backups/pg_backup.log
 # Did the last run succeed?
 cat /Users/nicolaitanghoj/pg_backups/last_run_status
 
-# Install / reinstall the LaunchDaemons (WireGuard + PostgreSQL)
+# Install / reinstall the WireGuard LaunchDaemons (postgres daemon is skipped — see below)
 sudo ./local_launchdaemons/install.sh
 
-# PostgreSQL daemon state and log
-sudo launchctl print system/com.nicolai.postgresql16 | head -20
+# PostgreSQL after a reboot: start it by hand (no sudo), then check the watchdog
+~/start-pg.sh
+tail -5 ~/.cron_monitor/postgres_check.log
 tail -20 /Users/nicolaitanghoj/Library/Logs/postgresql16.log
 
 # Tunnel state
@@ -42,7 +43,8 @@ gunzip -c database_name_YYYYMMDD_HHMM.dump.gz | pg_restore -U nicolaivinther -d 
 
 - `dump_psql_backup.sh` - Main script. Runs preflight checks, then for each database in `DB_LIST`: dump → verify → transfer → verify remote → rotate.
 - `local_cronjobs/backup_postgres.sh` - Cron wrapper. `cd`s into the repo, sources `.default.env` then `.development.env` (with `set -a` to export), and calls `dump_psql_backup.sh`.
-- `local_launchdaemons/` - Root LaunchDaemons: two that keep the WireGuard tunnel alive, one that auto-starts PostgreSQL at boot, plus `install.sh` to deploy them all.
+- `local_launchdaemons/` - Root LaunchDaemons: two that keep the WireGuard tunnel alive, plus a PostgreSQL auto-start daemon that is currently **disabled** (TCC, see below), and `install.sh` to deploy them.
+- `local_cronjobs/check_postgres.sh` - 5-minute cron check; Sentry alert when PostgreSQL is not accepting connections.
 - `.default.env` - Committed defaults (DB user/list, paths, retention, Sentry DSN).
 - `.development.env` - Local, gitignored overrides (`REMOTE_USER`, `REMOTE_HOST`).
 - `.envrc` - direnv config; loads both env files into the interactive shell.
@@ -150,17 +152,66 @@ healthy but the host is unreachable, it waits for **two consecutive** failures
 (~20 min) before acting — Marcus's server being down is not a reason to tear
 down our end.
 
-## PostgreSQL auto-start
+## PostgreSQL auto-start — BROKEN, daemon must stay uninstalled (BAS-179)
 
 The cluster's data directory is `/Volumes/MiniData/postgres_data` (external
 Thunderbolt SSD), so `brew services start postgresql@16` is **wrong twice**: it
 points at the internal default data dir, and it would race the volume mount at
-boot. Until 2026-07-31 there was no auto-start at all — every reboot needed a
-manual `pg_ctl -D /Volumes/MiniData/postgres_data start`.
+boot.
 
-`com.nicolai.postgresql16.plist` (installed by `install.sh`) runs
-`/usr/local/libexec/start_postgres_minidata.sh` as `nicolaitanghoj` at boot,
-before login. The launcher:
+**There is currently no working auto-start.** After every reboot someone has to
+run `~/start-pg.sh` (no sudo) on the mini — a copy of `start-pg.sh` in this repo. `local_cronjobs/check_postgres.sh`
+runs from cron every 5 min and raises a Sentry alert when postgres stops
+accepting connections (once, then hourly, plus a recovery event), so an
+outage surfaces within minutes instead of days — but nothing restarts it.
+
+### Why the LaunchDaemon cannot be used yet
+
+macOS TCC denies launchd-spawned processes access to the removable volume.
+`stat` works, content reads fail with EPERM, and `open()` blocks instead of
+erroring, so the daemon's postgres hangs in `PostmasterMain → SelectConfigFiles
+→ open(postgresql.conf)`. Interactive sessions work because they inherit
+Terminal's / Remote Login's Full Disk Access; a launchd job is its own
+responsible process and hits the per-binary deny rows:
+
+```
+/Library/Application Support/com.apple.TCC/TCC.db (needs sudo):
+  kTCCServiceSystemPolicyAllFiles | .../postgresql@16/16.10/bin/postgres | 0
+  kTCCServiceSystemPolicyAllFiles | .../postgresql@16/16.10/bin/pg_ctl   | 0
+~/Library/Application Support/com.apple.TCC/TCC.db:
+  kTCCServiceSystemPolicyRemovableVolumes | .../16.10/bin/pg_ctl         | 0
+```
+
+This is not fixable by changing the launcher (LaunchAgent, cron and login
+items all hit the same deny). Worse, a hung daemon child can wedge the *live*
+postmaster's lock-file recheck — that was the 4-hour outage on 2026-07-31.
+
+`install.sh` therefore **skips** `com.nicolai.postgresql16` unless
+`INSTALL_POSTGRES_DAEMON=1` is set, and warns if the plist is present. It was
+reinstalled by accident on 2026-08-25 (install.sh used to be unconditional)
+and respawned hung postgres processes for a day before being removed.
+
+### To fix (needs a GUI once)
+
+1. Enable Screen Sharing, connect from the MacBook Air via Tailscale
+   (`vnc://100.86.3.3`).
+2. System Settings → Privacy & Security → Full Disk Access → enable
+   `/opt/homebrew/Cellar/postgresql@16/<version>/bin/postgres` and `pg_ctl`
+   (they may already be listed, toggled off — that is the deny row).
+3. Verify the TCC rows read `2`, and verify with a LaunchDaemon probe that a
+   launchd job can `cat /Volumes/MiniData/postgres_data/PG_VERSION`.
+4. Only then: `INSTALL_POSTGRES_DAEMON=1 sudo ./local_launchdaemons/install.sh`,
+   reboot, and confirm postgres comes up unattended.
+
+**The grant is pinned to the Cellar path.** A Homebrew upgrade (16.10 → 16.11)
+moves the binaries, the grant silently stops applying, and postgres will hang
+at the next boot. After every `postgresql@16` upgrade, re-grant Full Disk
+Access and re-verify before trusting the daemon.
+
+### How the daemon works, once it is allowed to run
+
+`com.nicolai.postgresql16.plist` runs `/usr/local/libexec/start_postgres_minidata.sh`
+as `nicolaitanghoj` at boot, before login. The launcher:
 
 - waits up to 5 min for `/Volumes/MiniData` to mount, then exits nonzero so
   launchd retries;
