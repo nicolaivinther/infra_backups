@@ -1,63 +1,50 @@
 #!/bin/bash
-# PostgreSQL launcher — runs as nicolaitanghoj from com.nicolai.postgresql16.plist.
+# PostgreSQL boot launcher — runs as nicolaitanghoj from com.nicolai.postgresql16.plist.
 #
-# Why this exists: the cluster's data directory lives on the external MiniData
-# volume, and Homebrew's stock service points at the internal default data dir
-# (/opt/homebrew/var/postgresql@16) — which is why `brew services start` was
-# never an option and every reboot needed a manual
-# `pg_ctl -D /Volumes/MiniData/postgres_data start`. This script:
+# It does NOT touch the data directory itself: macOS TCC denies launchd-spawned
+# processes access to /Volumes/MiniData (open() blocks, see CLAUDE.md). Instead
+# it starts postgres through `ssh localhost` with a key restricted to the
+# forced command pg_autostart_cmd.sh. sshd holds Full Disk Access, so the
+# postmaster it spawns can read the volume. No GUI grant, no Cellar-path pin.
 #
-#   1. waits for /Volumes/MiniData to mount (launchd starts us before external
-#      volumes are necessarily up),
-#   2. defers to an already-running postmaster instead of fighting over the
-#      lock file (covers the manual-start era and the install-time handover),
-#   3. runs postgres in the foreground so launchd supervises it and restarts
-#      it after a crash (KeepAlive SuccessfulExit=false: crashes restart,
-#      a clean `pg_ctl stop` stays stopped until reboot or
-#      `sudo launchctl kickstart system/com.nicolai.postgresql16`).
-#
-# launchd sends SIGTERM at shutdown, which postgres treats as a "smart"
-# shutdown that waits forever for idle clients. We trap it and forward SIGINT
-# (fast shutdown) so the cluster closes cleanly instead of being SIGKILLed.
+# One-shot at boot with retries; launchd does not supervise the postmaster
+# (pg_ctl detaches it). check_postgres.sh alerts if it is ever down.
 
 set -uo pipefail
 
 DATA_DIR="/Volumes/MiniData/postgres_data"
-PG_BIN="/opt/homebrew/opt/postgresql@16/bin"
+KEY="/Users/nicolaitanghoj/.ssh/pg_autostart_ed25519"
+KNOWN_HOSTS="/Users/nicolaitanghoj/.ssh/known_hosts"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] launcher: $*"; }
 
-# Wait up to 5 minutes for the external volume.
+# Wait up to 5 minutes for the external volume. stat/-d is metadata and is
+# allowed by TCC; only content reads are denied.
 for _ in $(seq 1 60); do
     [ -d "$DATA_DIR" ] && break
     sleep 5
 done
 if [ ! -d "$DATA_DIR" ]; then
-    log "ERROR: $DATA_DIR not present after 5 min — is MiniData mounted? Exiting; launchd will retry."
+    log "ERROR: $DATA_DIR not present after 5 min — is MiniData mounted?"
     exit 1
 fi
 
-# Defer to an existing postmaster (e.g. one started manually with pg_ctl).
-# When it stops, we take over within 30s.
-if "$PG_BIN/pg_ctl" -D "$DATA_DIR" status >/dev/null 2>&1; then
-    log "postmaster already running for $DATA_DIR — waiting for it to stop before taking over"
-    while "$PG_BIN/pg_ctl" -D "$DATA_DIR" status >/dev/null 2>&1; do
-        sleep 30
-    done
-    log "existing postmaster stopped — taking over"
-fi
-
-"$PG_BIN/postgres" -D "$DATA_DIR" &
-PG_PID=$!
-trap 'kill -INT "$PG_PID" 2>/dev/null' TERM INT
-
-# `wait` returns early when a trapped signal arrives; loop until the child is
-# actually gone so the trap can do its fast-shutdown forwarding.
-STATUS=0
-while :; do
-    wait "$PG_PID"
-    STATUS=$?
-    kill -0 "$PG_PID" 2>/dev/null || break
+# Wait up to 2 minutes for sshd to accept connections.
+for _ in $(seq 1 24); do
+    nc -z -w 2 127.0.0.1 22 >/dev/null 2>&1 && break
+    sleep 5
 done
-log "postgres exited with status $STATUS"
-exit "$STATUS"
+
+for attempt in 1 2 3 4 5; do
+    if /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile="$KNOWN_HOSTS" \
+            -i "$KEY" 127.0.0.1; then
+        log "postgres started (attempt $attempt)"
+        exit 0
+    fi
+    log "attempt $attempt failed; retrying in 30s"
+    sleep 30
+done
+log "ERROR: could not start postgres via ssh after 5 attempts"
+exit 1
